@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+Thumbs.db
+
+# Runtime/generated data
+Attendance/*.csv
+static/face_recognition_model.pkl
+
+# Optional: keep dataset folders out of git
+static/faces/*
+!static/faces/.gitkeep
