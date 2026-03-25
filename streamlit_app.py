@@ -2,12 +2,20 @@ import os
 import re
 from datetime import date, datetime
 
-import cv2
 import joblib
 import numpy as np
 import pandas as pd
 import streamlit as st
 from sklearn.neighbors import KNeighborsClassifier
+
+try:
+    import cv2
+    CV2_AVAILABLE = True
+    CV2_IMPORT_ERROR = ""
+except Exception as exc:
+    cv2 = None
+    CV2_AVAILABLE = False
+    CV2_IMPORT_ERROR = str(exc)
 
 NIMGS = 12
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -16,7 +24,7 @@ STATIC_DIR = os.path.join(BASE_DIR, "static")
 FACES_DIR = os.path.join(STATIC_DIR, "faces")
 MODEL_PATH = os.path.join(STATIC_DIR, "face_recognition_model.pkl")
 
-face_detector = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+face_detector = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml") if CV2_AVAILABLE else None
 
 
 def datetoday():
@@ -48,6 +56,9 @@ def sanitize_text(value):
 
 
 def extract_faces(img):
+    if not CV2_AVAILABLE or face_detector is None:
+        return []
+
     try:
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         return face_detector.detectMultiScale(gray, 1.2, 5, minSize=(20, 20))
@@ -61,6 +72,9 @@ def identify_face(facearray):
 
 
 def train_model():
+    if not CV2_AVAILABLE:
+        return False
+
     ensure_directories()
     faces = []
     labels = []
@@ -144,6 +158,9 @@ def delete_user_folder(user_folder):
 
 
 def capture_new_user(newusername, newuserid):
+    if not CV2_AVAILABLE:
+        return False, f"OpenCV import failed in this environment: {CV2_IMPORT_ERROR}"
+
     user_folder = f"{newusername}_{newuserid}"
     userimagefolder = os.path.join(FACES_DIR, user_folder)
     os.makedirs(userimagefolder, exist_ok=True)
@@ -199,6 +216,9 @@ def capture_new_user(newusername, newuserid):
 
 
 def capture_attendance_once():
+    if not CV2_AVAILABLE:
+        return False, f"OpenCV import failed in this environment: {CV2_IMPORT_ERROR}"
+
     if not os.path.exists(MODEL_PATH):
         return False, "No trained model found. Please add a user first."
 
@@ -283,6 +303,11 @@ def app_main():
     st.set_page_config(page_title="Attendance System", layout="wide")
     st.title("Attendance System")
     st.caption(f"Date: {datetoday2()}")
+
+    if not CV2_AVAILABLE:
+        st.error("OpenCV failed to load in this deployment environment.")
+        st.info("For Streamlit Cloud, use Python 3.11 and opencv-python-headless. Also note: webcam capture via cv2.VideoCapture(0) is local-machine only.")
+        st.code(CV2_IMPORT_ERROR)
 
     attendance_df = extract_attendance_df()
 
