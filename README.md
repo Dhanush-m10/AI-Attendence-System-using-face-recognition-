@@ -1,6 +1,6 @@
 # Attendance System
 
-This project is rebuilt from scratch with the same core workflow as the reference project, and now runs with Streamlit:
+This project is rebuilt from scratch with the same core workflow as the reference Flask project:
 - Add user by capturing face images from webcam
 - Train a KNN model from saved face samples
 - Start attendance recognition from webcam
@@ -9,8 +9,9 @@ This project is rebuilt from scratch with the same core workflow as the referenc
 
 ## Project Structure
 
-- `streamlit_app.py`: Main Streamlit application
-- `app.py`: Flask version (optional)
+- `app.py`: Main Flask application
+- `templates/home.html`: Dashboard (attendance + add user)
+- `templates/listusers.html`: User list and delete page
 - `static/faces/`: Dataset folder in `Name_ID/` structure
 - `static/face_recognition_model.pkl`: Trained model file (auto-generated)
 - `Attendance/Attendance-MM_DD_YY.csv`: Daily attendance log (auto-generated)
@@ -36,12 +37,12 @@ pip install -r requirements.txt
 ## Run
 
 ```bash
-streamlit run streamlit_app.py
+python app.py
 ```
 
 Then open:
 
-- `http://localhost:8501`
+- `http://127.0.0.1:5000`
 
 ## Usage
 
