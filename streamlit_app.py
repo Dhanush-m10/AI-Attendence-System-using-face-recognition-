@@ -6,6 +6,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import streamlit as st
+from PIL import Image
 from sklearn.neighbors import KNeighborsClassifier
 
 # Page configuration
@@ -82,15 +83,11 @@ def get_cv2():
     return _cv2
 
 
-def require_cv2():
-    cv2_module = get_cv2()
-    if cv2_module is None:
-        st.error(
-            "OpenCV could not be loaded in this deployment. Streamlit Cloud currently needs a compatible cv2 build to use the webcam features."
-        )
-        if _cv2_import_error is not None:
-            st.caption(str(_cv2_import_error))
-    return cv2_module
+def pil_image_to_bgr_feature(image_obj, size=(50, 50)):
+    rgb = image_obj.convert("RGB").resize(size)
+    arr = np.array(rgb)
+    # Keep channel order consistent with cv2 arrays (BGR)
+    return arr[:, :, ::-1].ravel()
 
 # Initialize session state
 if "captured_count" not in st.session_state:
@@ -133,7 +130,7 @@ def totalreg():
 
 
 def extract_faces(img):
-    cv2_module = require_cv2()
+    cv2_module = get_cv2()
     if cv2_module is None:
         return []
 
@@ -159,9 +156,7 @@ def identify_face(facearray):
 
 def train_model():
     ensure_directories()
-    cv2_module = require_cv2()
-    if cv2_module is None:
-        return False
+    cv2_module = get_cv2()
 
     faces = []
     labels = []
@@ -173,13 +168,20 @@ def train_model():
 
         for img_name in os.listdir(user_dir):
             img_path = os.path.join(user_dir, img_name)
-            img = cv2_module.imread(img_path)
-            if img is None:
-                continue
-
-            resized_face = cv2_module.resize(img, (50, 50))
-            faces.append(resized_face.ravel())
-            labels.append(user)
+            if cv2_module is not None:
+                img = cv2_module.imread(img_path)
+                if img is None:
+                    continue
+                resized_face = cv2_module.resize(img, (50, 50))
+                faces.append(resized_face.ravel())
+                labels.append(user)
+            else:
+                try:
+                    pil_img = Image.open(img_path)
+                except Exception:
+                    continue
+                faces.append(pil_image_to_bgr_feature(pil_img, (50, 50)))
+                labels.append(user)
 
     if not faces:
         if os.path.exists(MODEL_PATH):
@@ -325,9 +327,7 @@ def home_page():
 
 
 def capture_faces_streamlit():
-    cv2_module = require_cv2()
-    if cv2_module is None:
-        return
+    cv2_module = get_cv2()
 
     st.divider()
     st.warning(f"Capturing faces for: {st.session_state.new_username} (ID: {st.session_state.new_userid})")
@@ -336,6 +336,39 @@ def capture_faces_streamlit():
     user_folder = f"{st.session_state.new_username}_{st.session_state.new_userid}"
     userimagefolder = os.path.join(FACES_DIR, user_folder)
     os.makedirs(userimagefolder, exist_ok=True)
+
+    if cv2_module is None:
+        st.info("Cloud mode: capture samples using your browser camera.")
+
+        if "browser_capture_count" not in st.session_state:
+            st.session_state.browser_capture_count = 0
+
+        count = st.session_state.browser_capture_count
+        progress_bar = st.progress(count / NIMGS)
+        st.write(f"Captured: {count}/{NIMGS}")
+
+        if count < NIMGS:
+            photo = st.camera_input(
+                "Capture face sample",
+                key=f"face_sample_{st.session_state.new_username}_{st.session_state.new_userid}_{count}",
+            )
+            if photo is not None:
+                image = Image.open(photo)
+                file_name = f"{st.session_state.new_username}_{count}.jpg"
+                save_path = os.path.join(userimagefolder, file_name)
+                image.convert("RGB").resize((256, 256)).save(save_path, format="JPEG")
+                st.session_state.browser_capture_count = count + 1
+                st.rerun()
+            return
+
+        if train_model():
+            st.success(f"User {st.session_state.new_username} (ID: {st.session_state.new_userid}) added successfully!")
+        else:
+            st.error("Could not train model after capture. Please try again.")
+
+        st.session_state.browser_capture_count = 0
+        st.session_state.adding_user = False
+        return
 
     cap = cv2_module.VideoCapture(0)
     
@@ -406,12 +439,30 @@ def capture_faces_streamlit():
 
 
 def attendance_recognition_streamlit():
-    cv2_module = require_cv2()
-    if cv2_module is None:
-        return
+    cv2_module = get_cv2()
 
     if not os.path.exists(MODEL_PATH):
         st.error("No trained model found. Please add a new user first.")
+        return
+
+    if cv2_module is None:
+        st.info("Cloud mode: use browser camera to take attendance.")
+        photo = st.camera_input("Take attendance photo", key="attendance_camera_capture")
+        if photo is None:
+            return
+
+        image = Image.open(photo)
+        feature = pil_image_to_bgr_feature(image, (50, 50)).reshape(1, -1)
+        identified_person = identify_face(feature)
+
+        if identified_person is None:
+            st.error("No trained model found. Please add a new user first.")
+            return
+
+        recognized_person = identified_person[0]
+        add_attendance(recognized_person)
+        display_name = recognized_person.rsplit("_", 1)[0] if "_" in recognized_person else recognized_person
+        st.success(f"Attendance marked for **{display_name}**.")
         return
 
     cap = cv2_module.VideoCapture(0)
