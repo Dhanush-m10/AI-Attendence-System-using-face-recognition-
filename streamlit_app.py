@@ -6,7 +6,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import streamlit as st
-from PIL import Image
+from PIL import Image, ImageEnhance
 from sklearn.neighbors import KNeighborsClassifier
 
 # Page configuration
@@ -88,6 +88,38 @@ def pil_image_to_bgr_feature(image_obj, size=(50, 50)):
     arr = np.array(rgb)
     # Keep channel order consistent with cv2 arrays (BGR)
     return arr[:, :, ::-1].ravel()
+
+
+def save_auto_samples_from_single_capture(image_obj, output_folder, username):
+    # Clear any previous samples for this user before writing a fresh set.
+    for file_name in os.listdir(output_folder):
+        file_path = os.path.join(output_folder, file_name)
+        if os.path.isfile(file_path):
+            os.remove(file_path)
+
+    base = image_obj.convert("RGB").resize((320, 320))
+
+    for i in range(NIMGS):
+        sample = base.copy()
+
+        # Small deterministic transforms create varied training samples quickly.
+        angle = (i - (NIMGS // 2)) * 1.5
+        sample = sample.rotate(angle, resample=Image.BICUBIC)
+
+        crop_margin = (i % 4) * 4
+        left = crop_margin
+        top = crop_margin
+        right = sample.width - crop_margin
+        bottom = sample.height - crop_margin
+        sample = sample.crop((left, top, right, bottom)).resize((256, 256))
+
+        brightness = 0.9 + (i * 0.02)
+        contrast = 0.92 + (i * 0.02)
+        sample = ImageEnhance.Brightness(sample).enhance(brightness)
+        sample = ImageEnhance.Contrast(sample).enhance(contrast)
+
+        file_name = f"{username}_{i}.jpg"
+        sample.save(os.path.join(output_folder, file_name), format="JPEG")
 
 # Initialize session state
 if "captured_count" not in st.session_state:
@@ -338,35 +370,27 @@ def capture_faces_streamlit():
     os.makedirs(userimagefolder, exist_ok=True)
 
     if cv2_module is None:
-        st.info("Cloud mode: capture samples using your browser camera.")
+        st.info("Cloud mode: take one clear photo and the app will auto-generate 12 training samples.")
 
-        if "browser_capture_count" not in st.session_state:
-            st.session_state.browser_capture_count = 0
-
-        count = st.session_state.browser_capture_count
-        progress_bar = st.progress(count / NIMGS)
-        st.write(f"Captured: {count}/{NIMGS}")
-
-        if count < NIMGS:
-            photo = st.camera_input(
-                "Capture face sample",
-                key=f"face_sample_{st.session_state.new_username}_{st.session_state.new_userid}_{count}",
-            )
-            if photo is not None:
-                image = Image.open(photo)
-                file_name = f"{st.session_state.new_username}_{count}.jpg"
-                save_path = os.path.join(userimagefolder, file_name)
-                image.convert("RGB").resize((256, 256)).save(save_path, format="JPEG")
-                st.session_state.browser_capture_count = count + 1
-                st.rerun()
+        photo = st.camera_input(
+            "Position your face in the center and capture once",
+            key=f"face_sample_{st.session_state.new_username}_{st.session_state.new_userid}_auto",
+        )
+        if photo is None:
             return
+
+        image = Image.open(photo)
+        save_auto_samples_from_single_capture(
+            image,
+            userimagefolder,
+            st.session_state.new_username,
+        )
 
         if train_model():
             st.success(f"User {st.session_state.new_username} (ID: {st.session_state.new_userid}) added successfully!")
         else:
             st.error("Could not train model after capture. Please try again.")
 
-        st.session_state.browser_capture_count = 0
         st.session_state.adding_user = False
         return
 
