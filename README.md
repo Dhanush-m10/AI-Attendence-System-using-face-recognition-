@@ -36,18 +36,45 @@ pip install -r requirements.txt
 
 ## Run
 
+### Option 1: Flask Web Application
+
 ```bash
 python app.py
 ```
 
-Then open:
+Then open: `http://127.0.0.1:5000`
 
-- `http://127.0.0.1:5000`
+**Why Flask?**
+- Traditional web app with native browser webcam integration
+- Desktop-friendly interface
+- Press `ESC` in webcam window to stop capture
+
+### Option 2: Streamlit Application
+
+```bash
+streamlit run streamlit_app.py
+```
+
+Then open: `http://localhost:8501`
+
+**Why Streamlit?**
+- Modern, responsive UI
+- Automatic hot reload during development
+- Interactive dashboard with better metrics display
+- Easier deployment on Streamlit Cloud
 
 ## Usage
 
-1. Open home page and add a new user (name + ID)
-2. Webcam captures samples and trains model automatically
-3. Click "Take Attendance" to start recognition
-4. Press `ESC` in webcam window to stop
-5. Open "Manage Users" to review/delete users
+### Both Versions Support:
+
+1. **Add New User**: Capture 12 face samples from webcam
+2. **Mark Attendance**: Real-time face recognition
+3. **Manage Users**: View, list, and delete registered users
+4. **Daily Reports**: Attendance logged in CSV format
+
+### Key Features:
+- ✅ KNN Face Recognition
+- ✅ Real-time Webcam Capture
+- ✅ Daily CSV Attendance Logs
+- ✅ User Management
+- ✅ Model Training on the fly
