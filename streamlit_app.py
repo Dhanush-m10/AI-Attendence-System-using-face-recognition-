@@ -2,7 +2,6 @@ import os
 import re
 from datetime import date, datetime
 
-import cv2
 import joblib
 import numpy as np
 import pandas as pd
@@ -61,7 +60,37 @@ STATIC_DIR = os.path.join(BASE_DIR, "static")
 FACES_DIR = os.path.join(STATIC_DIR, "faces")
 MODEL_PATH = os.path.join(STATIC_DIR, "face_recognition_model.pkl")
 
-face_detector = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+_cv2 = None
+_cv2_import_error = None
+face_detector = None
+
+
+def get_cv2():
+    global _cv2, _cv2_import_error, face_detector
+
+    if _cv2 is not None:
+        return _cv2
+
+    try:
+        import cv2 as cv2_module
+    except Exception as exc:
+        _cv2_import_error = exc
+        return None
+
+    _cv2 = cv2_module
+    face_detector = _cv2.CascadeClassifier(_cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    return _cv2
+
+
+def require_cv2():
+    cv2_module = get_cv2()
+    if cv2_module is None:
+        st.error(
+            "OpenCV could not be loaded in this deployment. Streamlit Cloud currently needs a compatible cv2 build to use the webcam features."
+        )
+        if _cv2_import_error is not None:
+            st.caption(str(_cv2_import_error))
+    return cv2_module
 
 # Initialize session state
 if "captured_count" not in st.session_state:
@@ -104,8 +133,18 @@ def totalreg():
 
 
 def extract_faces(img):
+    cv2_module = require_cv2()
+    if cv2_module is None:
+        return []
+
+    global face_detector
+    if face_detector is None:
+        face_detector = cv2_module.CascadeClassifier(
+            cv2_module.data.haarcascades + "haarcascade_frontalface_default.xml"
+        )
+
     try:
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray = cv2_module.cvtColor(img, cv2_module.COLOR_BGR2GRAY)
         return face_detector.detectMultiScale(gray, 1.2, 5, minSize=(20, 20))
     except Exception:
         return []
@@ -120,6 +159,10 @@ def identify_face(facearray):
 
 def train_model():
     ensure_directories()
+    cv2_module = require_cv2()
+    if cv2_module is None:
+        return False
+
     faces = []
     labels = []
 
@@ -130,11 +173,11 @@ def train_model():
 
         for img_name in os.listdir(user_dir):
             img_path = os.path.join(user_dir, img_name)
-            img = cv2.imread(img_path)
+            img = cv2_module.imread(img_path)
             if img is None:
                 continue
 
-            resized_face = cv2.resize(img, (50, 50))
+            resized_face = cv2_module.resize(img, (50, 50))
             faces.append(resized_face.ravel())
             labels.append(user)
 
@@ -282,6 +325,10 @@ def home_page():
 
 
 def capture_faces_streamlit():
+    cv2_module = require_cv2()
+    if cv2_module is None:
+        return
+
     st.divider()
     st.warning(f"Capturing faces for: {st.session_state.new_username} (ID: {st.session_state.new_userid})")
     st.info(f"Need to capture {NIMGS} face samples. Please look at your camera.")
@@ -290,7 +337,7 @@ def capture_faces_streamlit():
     userimagefolder = os.path.join(FACES_DIR, user_folder)
     os.makedirs(userimagefolder, exist_ok=True)
 
-    cap = cv2.VideoCapture(0)
+    cap = cv2_module.VideoCapture(0)
     
     if not cap.isOpened():
         st.error("Cannot access webcam. Check camera permissions.")
@@ -313,31 +360,31 @@ def capture_faces_streamlit():
                 st.error("Failed to capture frame from webcam.")
                 break
 
-            frame = cv2.flip(frame, 1)
+            frame = cv2_module.flip(frame, 1)
             faces = extract_faces(frame)
 
             for (x, y, w, h) in faces:
-                cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 20), 2)
-                cv2.putText(
+                cv2_module.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 20), 2)
+                cv2_module.putText(
                     frame,
                     f"Captured: {i}/{NIMGS}",
                     (20, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
+                    cv2_module.FONT_HERSHEY_SIMPLEX,
                     1,
                     (0, 255, 0),
                     2,
-                    cv2.LINE_AA,
+                    cv2_module.LINE_AA,
                 )
 
                 if j % 5 == 0 and i < NIMGS:
                     file_name = f"{st.session_state.new_username}_{i}.jpg"
                     face_crop = frame[y : y + h, x : x + w]
-                    resized = cv2.resize(face_crop, (256, 256))
-                    cv2.imwrite(os.path.join(userimagefolder, file_name), resized)
+                    resized = cv2_module.resize(face_crop, (256, 256))
+                    cv2_module.imwrite(os.path.join(userimagefolder, file_name), resized)
                     i += 1
                 j += 1
 
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame_rgb = cv2_module.cvtColor(frame, cv2_module.COLOR_BGR2RGB)
             stframe.image(frame_rgb, use_container_width=True)
             progress_bar.progress(i / NIMGS)
             status_text.text(f"Faces captured: {i}/{NIMGS}")
@@ -359,11 +406,15 @@ def capture_faces_streamlit():
 
 
 def attendance_recognition_streamlit():
+    cv2_module = require_cv2()
+    if cv2_module is None:
+        return
+
     if not os.path.exists(MODEL_PATH):
         st.error("No trained model found. Please add a new user first.")
         return
 
-    cap = cv2.VideoCapture(0)
+    cap = cv2_module.VideoCapture(0)
     if not cap.isOpened():
         st.error("Cannot access webcam. Check camera permissions.")
         return
@@ -382,15 +433,15 @@ def attendance_recognition_streamlit():
             if not ret:
                 break
 
-            frame = cv2.flip(frame, 1)
+            frame = cv2_module.flip(frame, 1)
             faces = extract_faces(frame)
             
             if len(faces) > 0:
                 x, y, w, h = faces[0]
-                cv2.rectangle(frame, (x, y), (x + w, y + h), (86, 32, 251), 2)
-                cv2.rectangle(frame, (x, y - 40), (x + w, y), (86, 32, 251), -1)
+                cv2_module.rectangle(frame, (x, y), (x + w, y + h), (86, 32, 251), 2)
+                cv2_module.rectangle(frame, (x, y - 40), (x + w, y), (86, 32, 251), -1)
 
-                face = cv2.resize(frame[y : y + h, x : x + w], (50, 50))
+                face = cv2_module.resize(frame[y : y + h, x : x + w], (50, 50))
                 identified_person = identify_face(face.reshape(1, -1))
                 
                 if identified_person is not None:
@@ -398,44 +449,44 @@ def attendance_recognition_streamlit():
                     add_attendance(identified_person)
                     recognized_person = identified_person
 
-                    cv2.putText(
+                    cv2_module.putText(
                         frame,
                         identified_person,
                         (x + 5, y - 15),
-                        cv2.FONT_HERSHEY_SIMPLEX,
+                        cv2_module.FONT_HERSHEY_SIMPLEX,
                         1,
                         (255, 255, 255),
                         2,
-                        cv2.LINE_AA,
+                        cv2_module.LINE_AA,
                     )
 
-                    cv2.putText(
+                    cv2_module.putText(
                         frame,
                         "Attendance marked. Closing camera...",
                         (10, 65),
-                        cv2.FONT_HERSHEY_SIMPLEX,
+                        cv2_module.FONT_HERSHEY_SIMPLEX,
                         0.75,
                         (0, 255, 0),
                         2,
-                        cv2.LINE_AA,
+                        cv2_module.LINE_AA,
                     )
                     
-                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    frame_rgb = cv2_module.cvtColor(frame, cv2_module.COLOR_BGR2RGB)
                     stframe.image(frame_rgb, use_container_width=True)
                     break
             else:
-                cv2.putText(
+                cv2_module.putText(
                     frame,
                     "Looking for face... Keep your face in frame",
                     (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
+                    cv2_module.FONT_HERSHEY_SIMPLEX,
                     0.7,
                     (0, 255, 255),
                     2,
-                    cv2.LINE_AA,
+                    cv2_module.LINE_AA,
                 )
 
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame_rgb = cv2_module.cvtColor(frame, cv2_module.COLOR_BGR2RGB)
             stframe.image(frame_rgb, use_container_width=True)
             status_text.text(f"Scanning... {frames_checked}/{max_frames}")
             frames_checked += 1

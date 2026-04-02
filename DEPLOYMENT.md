@@ -44,6 +44,7 @@ streamlit run streamlit_app.py
 - Opens at: `http://localhost:8501`
 - **Best for**: Quick development, cloud deployment (Streamlit Cloud)
 - Hot reload enabled during development
+- Streamlit Cloud may not load OpenCV wheels on every runtime image; if webcam features fail, use the Flask version locally or deploy on a Python environment that supports `cv2`
 
 ---
 
