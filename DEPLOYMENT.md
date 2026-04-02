@@ -31,7 +31,8 @@ python app.py
 ```
 
 - Opens at: `http://127.0.0.1:5000`
-- **Best for**: Desktop deployment, native webcam integration
+- **Best for**: Local desktop use with native webcam windows
+- Requires the full OpenCV package (`opencv-python`), not the headless build
 - Press `ESC` in webcam window to exit capture
 
 ### **Streamlit Version** (Modern Dashboard)
