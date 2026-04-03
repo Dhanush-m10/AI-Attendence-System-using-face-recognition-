@@ -1,12 +1,16 @@
 import os
 import re
+import threading
+import time
 from datetime import date, datetime
 
+import av
 import joblib
 import numpy as np
 import pandas as pd
 import streamlit as st
 from PIL import Image, ImageEnhance
+from streamlit_webrtc import WebRtcMode, VideoProcessorBase, webrtc_streamer
 from sklearn.neighbors import KNeighborsClassifier
 
 # Page configuration
@@ -90,6 +94,26 @@ def pil_image_to_bgr_feature(image_obj, size=(50, 50)):
     return arr[:, :, ::-1].ravel()
 
 
+def augment_capture_image(image_obj, sample_index, total_samples):
+    sample = image_obj.convert("RGB").resize((320, 320))
+
+    angle = (sample_index - (total_samples // 2)) * 1.5
+    sample = sample.rotate(angle, resample=Image.BICUBIC)
+
+    crop_margin = (sample_index % 4) * 4
+    left = crop_margin
+    top = crop_margin
+    right = sample.width - crop_margin
+    bottom = sample.height - crop_margin
+    sample = sample.crop((left, top, right, bottom)).resize((256, 256))
+
+    brightness = 0.92 + (sample_index * 0.015)
+    contrast = 0.94 + (sample_index * 0.015)
+    sample = ImageEnhance.Brightness(sample).enhance(brightness)
+    sample = ImageEnhance.Contrast(sample).enhance(contrast)
+    return sample
+
+
 def save_auto_samples_from_single_capture(image_obj, output_folder, username):
     # Clear any previous samples for this user before writing a fresh set.
     for file_name in os.listdir(output_folder):
@@ -97,35 +121,49 @@ def save_auto_samples_from_single_capture(image_obj, output_folder, username):
         if os.path.isfile(file_path):
             os.remove(file_path)
 
-    base = image_obj.convert("RGB").resize((320, 320))
-
     for i in range(NIMGS):
-        sample = base.copy()
-
-        # Small deterministic transforms create varied training samples quickly.
-        angle = (i - (NIMGS // 2)) * 1.5
-        sample = sample.rotate(angle, resample=Image.BICUBIC)
-
-        crop_margin = (i % 4) * 4
-        left = crop_margin
-        top = crop_margin
-        right = sample.width - crop_margin
-        bottom = sample.height - crop_margin
-        sample = sample.crop((left, top, right, bottom)).resize((256, 256))
-
-        brightness = 0.9 + (i * 0.02)
-        contrast = 0.92 + (i * 0.02)
-        sample = ImageEnhance.Brightness(sample).enhance(brightness)
-        sample = ImageEnhance.Contrast(sample).enhance(contrast)
+        sample = augment_capture_image(image_obj, i, NIMGS)
 
         file_name = f"{username}_{i}.jpg"
         sample.save(os.path.join(output_folder, file_name), format="JPEG")
+
+
+class AutoCaptureProcessor(VideoProcessorBase):
+    def __init__(self, output_folder, username, total_samples=NIMGS):
+        self.output_folder = output_folder
+        self.username = username
+        self.total_samples = total_samples
+        self.saved_count = 0
+        self.frame_count = 0
+        self.done = False
+        self.lock = threading.Lock()
+
+    def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
+        image = Image.fromarray(frame.to_ndarray(format="rgb24"))
+
+        with self.lock:
+            if not self.done and self.frame_count % 5 == 0 and self.saved_count < self.total_samples:
+                sample = augment_capture_image(image, self.saved_count, self.total_samples)
+                file_name = f"{self.username}_{self.saved_count}.jpg"
+                sample.save(os.path.join(self.output_folder, file_name), format="JPEG")
+                self.saved_count += 1
+                if self.saved_count >= self.total_samples:
+                    self.done = True
+            self.frame_count += 1
+
+        return frame
 
 # Initialize session state
 if "captured_count" not in st.session_state:
     st.session_state.captured_count = 0
 if "adding_user" not in st.session_state:
     st.session_state.adding_user = False
+if "cloud_capture_complete" not in st.session_state:
+    st.session_state.cloud_capture_complete = False
+if "cloud_capture_stop" not in st.session_state:
+    st.session_state.cloud_capture_stop = False
+if "flash_message" not in st.session_state:
+    st.session_state.flash_message = ""
 
 
 def datetoday():
@@ -286,6 +324,10 @@ def deletefolder(folder_path):
 
 
 def home_page():
+    if st.session_state.flash_message:
+        st.success(st.session_state.flash_message)
+        st.session_state.flash_message = ""
+
     # Header
     col_title, col_nav = st.columns([3, 1])
     with col_title:
@@ -343,6 +385,8 @@ def home_page():
                     st.session_state.new_username = sanitize_text(new_username)
                     st.session_state.new_userid = sanitize_text(new_userid)
                     st.session_state.captured_count = 0
+                    st.session_state.cloud_capture_complete = False
+                    st.session_state.cloud_capture_stop = False
                     st.rerun()
         
         st.info("""
@@ -370,28 +414,63 @@ def capture_faces_streamlit():
     os.makedirs(userimagefolder, exist_ok=True)
 
     if cv2_module is None:
-        st.info("Cloud mode: take one clear photo and the app will auto-generate 12 training samples.")
+        st.info("Cloud mode: camera starts automatically, records 12 frames, then closes itself.")
 
-        photo = st.camera_input(
-            "Position your face in the center and capture once",
-            key=f"face_sample_{st.session_state.new_username}_{st.session_state.new_userid}_auto",
+        rtc_configuration = {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+        capture_key = f"auto-capture-{st.session_state.new_username}-{st.session_state.new_userid}"
+
+        ctx = webrtc_streamer(
+            key=capture_key,
+            mode=WebRtcMode.SENDRECV,
+            rtc_configuration=rtc_configuration,
+            media_stream_constraints={"video": True, "audio": False},
+            desired_playing_state=not st.session_state.cloud_capture_stop,
+            video_processor_factory=lambda: AutoCaptureProcessor(
+                userimagefolder, st.session_state.new_username
+            ),
+            async_processing=True,
         )
-        if photo is None:
+
+        status_placeholder = st.empty()
+
+        processor = None
+        start_time = time.time()
+        while time.time() - start_time < 30:
+            processor = ctx.video_processor
+            if processor is not None:
+                break
+            if ctx.state.playing:
+                status_placeholder.info("Camera is starting. Waiting for the browser stream to attach...")
+            else:
+                status_placeholder.info("Starting camera. Allow browser permissions if prompted.")
+            time.sleep(0.1)
+
+        if processor is None:
+            st.error("Camera did not start. Allow browser permissions or reload the page.")
             return
 
-        image = Image.open(photo)
-        save_auto_samples_from_single_capture(
-            image,
-            userimagefolder,
-            st.session_state.new_username,
-        )
+        while ctx.state.playing and not processor.done:
+            status_placeholder.info(
+                f"Capturing samples automatically: {processor.saved_count}/{NIMGS}"
+            )
+            time.sleep(0.1)
 
-        if train_model():
-            st.success(f"User {st.session_state.new_username} (ID: {st.session_state.new_userid}) added successfully!")
-        else:
-            st.error("Could not train model after capture. Please try again.")
+        if processor.done and not st.session_state.cloud_capture_complete:
+            with st.spinner("Training model..."):
+                trained = train_model()
 
-        st.session_state.adding_user = False
+            if trained:
+                st.session_state.flash_message = (
+                    f"User {st.session_state.new_username} (ID: {st.session_state.new_userid}) added successfully!"
+                )
+            else:
+                st.session_state.flash_message = "Could not train model after capture. Please try again."
+
+            st.session_state.cloud_capture_complete = True
+            st.session_state.cloud_capture_stop = True
+            st.session_state.adding_user = False
+            st.rerun()
+
         return
 
     cap = cv2_module.VideoCapture(0)
